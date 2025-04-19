@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import zipfile
 
 import numpy as np
@@ -197,4 +198,5 @@ def analytics(db: Session = Depends(get_db)) -> Analytics:
 
 
 # Serve the React build directory last
-app.mount("/", StaticFiles(directory="build", html=True), name="static")
+if os.path.exists("build"):
+    app.mount("/", StaticFiles(directory="build", html=True), name="static")

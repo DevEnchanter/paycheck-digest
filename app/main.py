@@ -19,6 +19,7 @@ init_db()
 
 app = FastAPI(title="Paycheck Digest")
 
+
 @app.exception_handler(Exception)
 async def all_exceptions_handler(request: Request, exc: Exception):
     """
@@ -26,10 +27,12 @@ async def all_exceptions_handler(request: Request, exc: Exception):
     """
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
+
 # Health check
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
 
 # Digest endpoint
 @app.post("/digest")
@@ -66,11 +69,14 @@ async def digest(file: UploadFile = File(...)) -> dict:
             net_pay=result.get("net_pay"),
             taxes=result.get("taxes"),
         )
-        db.add(stub); db.commit(); db.refresh(stub)
+        db.add(stub)
+        db.commit()
+        db.refresh(stub)
     finally:
         db.close()
 
     return result
+
 
 # History endpoint
 @app.get("/history")
@@ -90,6 +96,7 @@ def history(limit: int = 20) -> list[dict]:
     finally:
         db.close()
 
+
 # Analytics response model
 class Analytics(BaseModel):
     total_gross: float
@@ -101,6 +108,7 @@ class Analytics(BaseModel):
     net_trend_slope: float
     anomalies: list[dict]
 
+
 # DB session dependency
 def get_db():
     db = SessionLocal()
@@ -108,6 +116,7 @@ def get_db():
         yield db
     finally:
         db.close()
+
 
 # Analytics endpoint
 @app.get("/analytics", response_model=Analytics)
@@ -185,6 +194,7 @@ def analytics(db: Session = Depends(get_db)) -> Analytics:
             net_trend_slope=0.0,
             anomalies=[],
         )
+
 
 # Serve the React build directory last
 app.mount("/", StaticFiles(directory="build", html=True), name="static")

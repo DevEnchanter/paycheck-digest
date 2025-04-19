@@ -1,8 +1,7 @@
 import datetime
 import os
 
-from sqlalchemy import (JSON, Column, DateTime, Float, Integer, String,
-                        create_engine)
+from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./paystubs.db")

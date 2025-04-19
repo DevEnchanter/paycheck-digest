@@ -129,7 +129,7 @@ def analytics(db: Session = Depends(get_db)):
                 try:
                     loaded = json.loads(s.taxes)
                     taxes = loaded if isinstance(loaded, dict) else {}
-                except json.JSONDecodeError:
+                except Exception:
                     taxes = {}
             else:
                 taxes = {}

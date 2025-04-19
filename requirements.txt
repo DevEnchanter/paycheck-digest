@@ -9,3 +9,5 @@ sqlalchemy
 pytest
 numpy
 python-multipart
+pytest-cov
+slowapi

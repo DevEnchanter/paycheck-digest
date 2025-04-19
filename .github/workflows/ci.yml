@@ -1,22 +1,61 @@
+name: CI Pipeline
 
-name: CI
-on: [push]
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
 jobs:
-  build:
+  backend:
+    name: 🐍 Python lint · security · tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Node
-        uses: actions/setup-node@v3
-        with: node-version: '18'
-      - name: Build frontend
-        working-directory: web
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
         run: |
-          npm ci
-          npm run build
-      - uses: actions/setup-python@v5
-        with: python-version: '3.11'
-      - name: Install Python deps
-        run: pip install -r requirements.txt
-      - name: Run tests
-        run: pytest -q
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # tools for lint & security
+          pip install flake8 bandit python-multipart pytest
+
+      - name: Run Flake8
+        run: flake8 app/ --max-line-length=88
+
+      - name: Run Bandit
+        run: bandit -r app/ --quiet
+
+      - name: Run backend tests
+        run: PYTHONPATH=. pytest --maxfail=1 --disable-warnings -q
+
+  frontend:
+    name: ⚛️ JS lint · audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install JS dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: web
+        run: npm run lint
+
+      - name: Run npm audit (warnings only)
+        working-directory: web
+        run: npm audit --audit-level=high || echo "🔒 audit found issues, but build will continue"

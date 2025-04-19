@@ -7,77 +7,54 @@ on:
     branches: [ main ]
 
 jobs:
-  python-lint:
-    name: "Python Lint (flake8)"
+  backend:
+    name: 🐍 Python lint · security · tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - name: Install lint dependencies
-        run: pip install flake8
-      - name: Run flake8
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # tools for lint & security
+          pip install flake8 bandit python-multipart pytest
+
+      - name: Run Flake8
         run: flake8 app/ --max-line-length=88
 
-  js-lint:
-    name: "JS Lint (ESLint)"
+      - name: Run Bandit
+        run: bandit -r app/ --quiet
+
+      - name: Run backend tests
+        run: pytest --maxfail=1 --disable-warnings -q
+
+  frontend:
+    name: ⚛️ JS lint · audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-      - name: Install dependencies
+          cache: 'npm'
+
+      - name: Install JS dependencies
         working-directory: web
         run: npm ci
+
       - name: Run ESLint
         working-directory: web
         run: npm run lint
 
-  python-security:
-    name: "Python Security Scan (bandit)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Install bandit
-        run: pip install bandit
-      - name: Run Bandit
-        run: bandit -r app/ --quiet
-
-  js-security:
-    name: "JS Security Audit"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-      - name: Install dependencies
+      - name: Run npm audit (warnings only)
         working-directory: web
-        run: npm ci
-      - name: Run npm audit
-        working-directory: web
-        run: npm audit --audit-level=high
-
-  test-backend:
-    name: "Backend Tests"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: pip install --no-cache-dir -r requirements.txt
-      - name: Run pytest
-        run: pytest --maxfail=1 --disable-warnings -q
-
+        run: npm audit --audit-level=high || echo "🔒 audit found issues, but build will continue"

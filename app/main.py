@@ -3,12 +3,7 @@ import json
 import zipfile
 
 import numpy as np
-from fastapi import FastAPI
-from fastapi import Request
-from fastapi import UploadFile
-from fastapi import File
-from fastapi import HTTPException
-from fastapi import Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -19,12 +14,10 @@ from .database import SessionLocal
 from .database import Paystub
 from .pdf_parser import parse_paystub
 
-
 # Initialize the database
 init_db()
 
 app = FastAPI(title="Paycheck Digest")
-
 
 @app.exception_handler(Exception)
 async def all_exceptions_handler(request: Request, exc: Exception):
@@ -33,12 +26,12 @@ async def all_exceptions_handler(request: Request, exc: Exception):
     """
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
-
+# Health check
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
 
-
+# Digest endpoint
 @app.post("/digest")
 async def digest(file: UploadFile = File(...)) -> dict:
     name = file.filename.lower()
@@ -73,15 +66,13 @@ async def digest(file: UploadFile = File(...)) -> dict:
             net_pay=result.get("net_pay"),
             taxes=result.get("taxes"),
         )
-        db.add(stub)
-        db.commit()
-        db.refresh(stub)
+        db.add(stub); db.commit(); db.refresh(stub)
     finally:
         db.close()
 
     return result
 
-
+# History endpoint
 @app.get("/history")
 def history(limit: int = 20) -> list[dict]:
     db = SessionLocal()
@@ -99,7 +90,7 @@ def history(limit: int = 20) -> list[dict]:
     finally:
         db.close()
 
-
+# Analytics response model
 class Analytics(BaseModel):
     total_gross: float
     total_net: float
@@ -110,7 +101,7 @@ class Analytics(BaseModel):
     net_trend_slope: float
     anomalies: list[dict]
 
-
+# DB session dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -118,7 +109,7 @@ def get_db():
     finally:
         db.close()
 
-
+# Analytics endpoint
 @app.get("/analytics", response_model=Analytics)
 def analytics(db: Session = Depends(get_db)) -> Analytics:
     """
@@ -195,6 +186,5 @@ def analytics(db: Session = Depends(get_db)) -> Analytics:
             anomalies=[],
         )
 
-
 # Serve the React build directory last
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+app.mount("/", StaticFiles(directory="build", html=True), name="static")

@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from .database import init_db, SessionLocal, Paystub
@@ -6,17 +7,28 @@ from .pdf_parser import parse_paystub
 import zipfile, io, json, numpy as np
 from pydantic import BaseModel
 
-# Initialize DB
+# Initialize the database
 init_db()
 
 app = FastAPI(title="Paycheck Digest")
 
-# Health check
+# --- NEW: Global exception handler ---
+@app.exception_handler(Exception)
+async def all_exceptions_handler(request: Request, exc: Exception):
+    """
+    Catches any unhandled exception in our routes
+    and returns a consistent JSON response.
+    """
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)}
+    )
+# --------------------------------------
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# Digest endpoint
 @app.post("/digest")
 async def digest(file: UploadFile = File(...)):
     name = file.filename.lower()
@@ -43,13 +55,14 @@ async def digest(file: UploadFile = File(...)):
             net_pay=result.get("net_pay"),
             taxes=result.get("taxes")
         )
-        db.add(stub); db.commit(); db.refresh(stub)
+        db.add(stub)
+        db.commit()
+        db.refresh(stub)
     finally:
         db.close()
 
     return result
 
-# History endpoint
 @app.get("/history")
 def history(limit: int = 20):
     db = SessionLocal()
@@ -60,14 +73,10 @@ def history(limit: int = 20):
               .limit(limit)
               .all()
         )
-        return [
-            {"period_start": r.period_start, "net_pay": r.net_pay}
-            for r in rows
-        ]
+        return [{"period_start": r.period_start, "net_pay": r.net_pay} for r in rows]
     finally:
         db.close()
 
-# Analytics response model
 class Analytics(BaseModel):
     total_gross:     float
     total_net:       float
@@ -78,7 +87,6 @@ class Analytics(BaseModel):
     net_trend_slope: float
     anomalies:       list[dict]
 
-# DB session dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -86,52 +94,41 @@ def get_db():
     finally:
         db.close()
 
-# Analytics endpoint
 @app.get("/analytics", response_model=Analytics)
 def analytics(db: Session = Depends(get_db)):
     stubs = db.query(Paystub).all()
     if not stubs:
         return Analytics(
-            total_gross=0.0,
-            total_net=0.0,
-            avg_net=0.0,
-            min_net=0.0,
-            max_net=0.0,
-            tax_totals={},
-            net_trend_slope=0.0,
-            anomalies=[]
+            total_gross=0, total_net=0, avg_net=0,
+            min_net=0, max_net=0, tax_totals={},
+            net_trend_slope=0, anomalies=[]
         )
 
     nets = np.array([s.net_pay for s in stubs], dtype=float)
     total_gross = float(sum(s.gross_pay for s in stubs))
 
-    # Aggregate taxes safely
+    # aggregate taxes
     tax_totals = {}
     for s in stubs:
-        taxes = s.taxes
-        if isinstance(taxes, str):
-            try:
-                taxes = json.loads(taxes)
-            except:
-                taxes = {}
-        for k, v in (taxes or {}).items():
+        taxes = s.taxes if isinstance(s.taxes, dict) else json.loads(s.taxes or "{}")
+        for k, v in taxes.items():
             try:
                 tax_totals[k] = tax_totals.get(k, 0.0) + float(v)
             except:
-                continue
+                pass
 
-    # Compute simple trend slope
+    # compute trend
     x = np.arange(len(nets))
     slope = float(np.polyfit(x, nets, 1)[0]) if len(nets) > 1 else 0.0
 
-    # Detect >10% anomalies against 3‑period moving avg
+    # detect anomalies
     anomalies = []
     for i in range(3, len(nets)):
         window = nets[i-3:i]
         if window.mean() and abs(nets[i] - window.mean()) / window.mean() > 0.10:
             anomalies.append({
                 "period_start": stubs[i].period_start,
-                "net_pay":      float(nets[i])
+                "net_pay": float(nets[i])
             })
 
     return Analytics(
@@ -144,7 +141,10 @@ def analytics(db: Session = Depends(get_db)):
         net_trend_slope=slope,
         anomalies=anomalies
     )
+    
+    @app.get("/cause_error")
+    def cause_error():
+        raise RuntimeError("Test exception for global handler")
 
-# Mount the React build directory last,
-# so all /health, /digest, /history, /analytics routes match first.
+# Serve the React build
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

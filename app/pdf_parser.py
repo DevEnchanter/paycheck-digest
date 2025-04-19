@@ -12,6 +12,8 @@ import fitz
 import openai
 import PyPDF2
 from dotenv import load_dotenv
+from app.llm_client import LlmClient, UsageQuotaExceeded
+from app.config import settings
 
 # Load environment variables from .env
 load_dotenv()
@@ -25,24 +27,18 @@ LEDGER_PATH = os.path.expanduser("~/.paydigest_budget.json")
 # Only 'type' is allowed in response_format
 RESPONSE_FORMAT = {"type": "json_object"}
 
+# TODO(Issue #6): Replace this with a robust budget check.
+_budget = 10000  # Placeholder budget
+_spent = 0  # Placeholder spending
 
-def _budget_ok(cost: int = 1) -> bool:
-    """Return True if within monthly cost budget."""
-    if MAX_COST_CENTS <= 0:
+
+def _budget_ok(cost=1) -> bool:
+    """Return True if the cost is within budget, False otherwise."""
+    global _spent
+    if _spent + cost <= _budget:
+        _spent += cost
         return True
-    record = {"spent": 0, "month": dt.date.today().month}
-    if os.path.exists(LEDGER_PATH):
-        try:
-            record = json.load(open(LEDGER_PATH))
-        except json.JSONDecodeError:
-            pass
-    if record.get("month") != dt.date.today().month:
-        record = {"spent": 0, "month": dt.date.today().month}
-    if record["spent"] + cost > MAX_COST_CENTS:
-        return False
-    record["spent"] += cost
-    json.dump(record, open(LEDGER_PATH, "w"))
-    return True
+    return False
 
 
 def _selectable_text(pdf_bytes: bytes) -> str:
@@ -77,72 +73,19 @@ def parse_paystub(pdf_bytes: bytes) -> dict:
     All personal identifiers (names, addresses, SSNs, IDs) are redacted.
     """
     if not _budget_ok():
-        return {"error": "Monthly LLM budget exhausted"}
+        # Budget exhausted → HTTP 402
+        from fastapi import HTTPException
 
-    # 1) Try standard text extraction
-    text = _selectable_text(pdf_bytes)
-    ocr_fallback = False
-
-    if text.strip():
-        # Use the text branch
-        messages = [
-            {
-                "role": "system",
-                "content": """
-You are a payroll data extractor. **Redact ALL personal identifiers** (employee name, address, SSN, employee ID, etc.).
-Extract **only** the Current column amounts (ignore Year‑to‑Date). Return exactly this JSON:
-  • period_start, period_end, gross_pay, net_pay, taxes, plain_english, html_summary
-Respond ONLY with that JSON object.
-""",
-            },
-            {"role": "user", "content": text[:15000]},
-        ]
-        model = TEXT_MODEL
-
-    else:
-        # Fallback to OCR branch
-        ocr_fallback = True
-        img_b64 = _first_page_png_b64(pdf_bytes)
-        messages = [
-            {
-                "role": "system",
-                "content": """
-You are a payroll data extractor. **Redact ALL personal identifiers** (employee name, address, SSN, IDs).
-This is from a scanned image—extract only the Current column amounts (ignore Y‑T‑D). Return exactly this JSON:
-  • period_start, period_end, gross_pay, net_pay, taxes, plain_english, html_summary
-Respond ONLY with that JSON object.
-""",
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64," + img_b64},
-                    },
-                    {
-                        "type": "text",
-                        "text": "Extract payroll data from this image, redact PII, include html_summary.",
-                    },
-                ],
-            },
-        ]
-        model = VISION_MODEL
+        raise HTTPException(
+            status_code=402,
+            detail="Monthly LLM budget exhausted"
+        )
 
     try:
-        resp = openai.chat.completions.create(
-            model=model, messages=messages, response_format=RESPONSE_FORMAT
-        )
-        data = json.loads(resp.choices[0].message.content)
-    except Exception as e:
-        return {"error": f"OpenAI call failed: {e}"}
+        llm_client = LlmClient(api_key=settings.openai_api_key)
+        digest = llm_client.digest_paystub(pdf_bytes=pdf_bytes)
+    except UsageQuotaExceeded:
+        # TODO(Issue #7): Propagate this error to the user.
+        return {"error": "OpenAI quota exceeded"}
 
-    # Ensure html_summary exists
-    if "html_summary" not in data and "plain_english" in data:
-        data["html_summary"] = (
-            f"<div class='summary-card'><p>{data['plain_english']}</p></div>"
-        )
-
-    # Inject our fallback flag
-    data["ocr_fallback"] = ocr_fallback
-    return data
+    return digest

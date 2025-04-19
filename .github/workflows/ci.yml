@@ -33,7 +33,7 @@ jobs:
         run: bandit -r app/ --quiet
 
       - name: Run backend tests
-        run: pytest --maxfail=1 --disable-warnings -q
+        run: PYTHONPATH=. pytest --maxfail=1 --disable-warnings -q
 
   frontend:
     name: ⚛️ JS lint · audit

@@ -3,49 +3,64 @@ import json
 import zipfile
 
 import numpy as np
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI
+from fastapi import Request
+from fastapi import UploadFile
+from fastapi import File
+from fastapi import HTTPException
+from fastapi import Depends
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-from .database import Paystub, SessionLocal, init_db
+from .database import init_db
+from .database import SessionLocal
+from .database import Paystub
 from .pdf_parser import parse_paystub
 
-# Initialize database
+
+# Initialize the database
 init_db()
 
 app = FastAPI(title="Paycheck Digest")
 
 
-# Global exception handler
 @app.exception_handler(Exception)
 async def all_exceptions_handler(request: Request, exc: Exception):
+    """
+    Catch-all exception handler: returns JSON {"detail": ...} with status 500.
+    """
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 
-# Health check endpoint
 @app.get("/health")
-def health():
+def health() -> dict:
     return {"status": "ok"}
 
 
-# Paystub parsing endpoint
 @app.post("/digest")
-async def digest(file: UploadFile = File(...)):
+async def digest(file: UploadFile = File(...)) -> dict:
     name = file.filename.lower()
     data = await file.read()
 
     if name.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(data)) as z:
-            pdfs = [n for n in z.namelist() if n.lower().endswith(".pdf")]
+            pdfs = [
+                n for n in z.namelist() if n.lower().endswith(".pdf")
+            ]
             if not pdfs:
-                raise HTTPException(status_code=400, detail="ZIP contains no PDF")
+                raise HTTPException(
+                    status_code=400, detail="ZIP contains no PDF"
+                )
             data = z.read(pdfs[0])
     elif not name.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF or ZIP supported")
+        raise HTTPException(
+            status_code=400, detail="Only PDF or ZIP supported"
+        )
 
     result = parse_paystub(data)
+
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
 
@@ -67,18 +82,24 @@ async def digest(file: UploadFile = File(...)):
     return result
 
 
-# History endpoint
 @app.get("/history")
-def history(limit: int = 20):
+def history(limit: int = 20) -> list[dict]:
     db = SessionLocal()
     try:
-        rows = db.query(Paystub).order_by(Paystub.created_at.desc()).limit(limit).all()
-        return [{"period_start": r.period_start, "net_pay": r.net_pay} for r in rows]
+        rows = (
+            db.query(Paystub)
+            .order_by(Paystub.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {"period_start": r.period_start, "net_pay": r.net_pay}
+            for r in rows
+        ]
     finally:
         db.close()
 
 
-# Analytics response model
 class Analytics(BaseModel):
     total_gross: float
     total_net: float
@@ -90,7 +111,6 @@ class Analytics(BaseModel):
     anomalies: list[dict]
 
 
-# Dependency: DB session
 def get_db():
     db = SessionLocal()
     try:
@@ -99,42 +119,36 @@ def get_db():
         db.close()
 
 
-# Analytics endpoint with robust tax handling
 @app.get("/analytics", response_model=Analytics)
-def analytics(db: Session = Depends(get_db)):
+def analytics(db: Session = Depends(get_db)) -> Analytics:
+    """
+    Aggregates paystub data. On error, returns zeroed Analytics.
+    """
     try:
         stubs = db.query(Paystub).all()
         if not stubs:
-            return Analytics(
-                total_gross=0.0,
-                total_net=0.0,
-                avg_net=0.0,
-                min_net=0.0,
-                max_net=0.0,
-                tax_totals={},
-                net_trend_slope=0.0,
-                anomalies=[],
-            )
+            raise ValueError("no records")
 
         nets = np.array([s.net_pay for s in stubs], dtype=float)
         total_gross = float(sum(s.gross_pay for s in stubs))
 
         # Safely aggregate taxes
-        tax_totals = {}
+        tax_totals: dict[str, float] = {}
         for s in stubs:
-            # Determine taxes dict or empty
             if isinstance(s.taxes, dict):
                 taxes = s.taxes
             elif isinstance(s.taxes, str):
                 try:
                     loaded = json.loads(s.taxes)
-                    taxes = loaded if isinstance(loaded, dict) else {}
                 except Exception:
+                    loaded = {}
+                if isinstance(loaded, dict):
+                    taxes = loaded
+                else:
                     taxes = {}
             else:
                 taxes = {}
 
-            # Iterate items safely
             for k, v in taxes.items():
                 try:
                     tax_totals[k] = tax_totals.get(k, 0.0) + float(v)
@@ -143,10 +157,13 @@ def analytics(db: Session = Depends(get_db)):
 
         # Compute net-pay trend slope
         x = np.arange(len(nets))
-        slope = float(np.polyfit(x, nets, 1)[0]) if len(nets) > 1 else 0.0
+        if len(nets) > 1:
+            slope = float(np.polyfit(x, nets, 1)[0])
+        else:
+            slope = 0.0
 
-        # Detect >10% anomalies
-        anomalies = []
+        # Detect >10% anomalies over a 3-period window
+        anomalies: list[dict] = []
         for i in range(3, len(nets)):
             window = nets[i - 3 : i]
             if window.mean() and abs(nets[i] - window.mean()) / window.mean() > 0.10:
@@ -164,6 +181,7 @@ def analytics(db: Session = Depends(get_db)):
             net_trend_slope=slope,
             anomalies=anomalies,
         )
+
     except Exception as e:
         print(f"[analytics error] {e}")
         return Analytics(
@@ -178,5 +196,5 @@ def analytics(db: Session = Depends(get_db)):
         )
 
 
-# Serve the React build
+# Serve the React build directory last
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

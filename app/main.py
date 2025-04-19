@@ -5,7 +5,7 @@ import zipfile
 
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -15,10 +15,27 @@ from .database import SessionLocal
 from .database import Paystub
 from .pdf_parser import parse_paystub
 
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
 # Initialize the database
 init_db()
 
+# Create the rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Paycheck Digest")
+
+# Attach the limiter middleware
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+# Handler for rate-limit errors
+@app.exception_handler(RateLimitExceeded)
+def rate_limit_handler(request, exc):
+    return PlainTextResponse("Too many requests", status_code=429)
 
 
 @app.exception_handler(Exception)
@@ -37,6 +54,7 @@ def health() -> dict:
 
 # Digest endpoint
 @app.post("/digest")
+@limiter.limit("5/minute")
 async def digest(file: UploadFile = File(...)) -> dict:
     name = file.filename.lower()
     data = await file.read()
